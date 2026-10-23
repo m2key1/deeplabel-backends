@@ -1,0 +1,2 @@
+# The model's own dependencies, e.g.
+# ultralytics==8.3.0

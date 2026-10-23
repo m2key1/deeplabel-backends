@@ -1,0 +1,22 @@
+[project]
+name = "deeplabel-kraken-lines"
+version = "1.0.0"
+license = "Apache-2.0"
+description = "Kraken's baseline segmenter as a DeepLabel model backend"
+requires-python = ">=3.12,<3.13"
+dependencies = ["kraken==7.1.1", "torch>=2.11,<=2.14", "torchvision"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu130" }
+torchvision = { index = "pytorch-cu130" }
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[dependency-groups]
+dev = ["pytest>=8"]

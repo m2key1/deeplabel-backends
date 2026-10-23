@@ -1,0 +1,16 @@
+services:
+  my-layout-backend:
+    build: .
+    restart: unless-stopped
+    environment:
+      MODEL_BACKEND_SECRET: ${MY_LAYOUT_BACKEND_SECRET:?}
+      MODEL_CACHE_MAX_GB: ${MY_LAYOUT_CACHE_GB:-20}
+      MODEL_MAX_LOADED: 2
+    volumes:
+      - my-layout-cache:/cache
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["0"], capabilities: [gpu]}]
+volumes:
+  my-layout-cache:

@@ -1,0 +1,34 @@
+# Runs the images build.sh made; each service is independent, so start only the ones a
+# machine serves: docker compose up -d deepocr. Tags and secrets come from .env.
+x-backend: &backend
+  restart: unless-stopped
+  # PyTorch's data loader workers pass batches through shared memory; Docker's 64 MB is
+  # too little for a training run.
+  shm_size: 8gb
+  deploy:
+    resources:
+      reservations:
+        devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+
+services:
+  deepocr:
+    <<: *backend
+    image: deepocr-backend:${DEEPOCR_TAG:?the tag build.sh printed}
+    environment:
+      MODEL_BACKEND_SECRET: ${DEEPOCR_SECRET:?}
+      MODEL_CACHE_MAX_GB: ${DEEPOCR_CACHE_GB:-20}
+    volumes: [deepocr-cache:/cache]
+    ports: ["${DEEPOCR_PORT:-9201}:9100"]
+
+  kraken:
+    <<: *backend
+    image: kraken-lines-backend:${KRAKEN_TAG:?the tag build.sh printed}
+    environment:
+      MODEL_BACKEND_SECRET: ${KRAKEN_SECRET:?}
+      MODEL_CACHE_MAX_GB: ${KRAKEN_CACHE_GB:-5}
+    volumes: [kraken-cache:/cache]
+    ports: ["${KRAKEN_PORT:-9205}:9100"]
+
+volumes:
+  deepocr-cache:
+  kraken-cache:

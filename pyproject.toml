@@ -1,0 +1,23 @@
+[project]
+name = "deeplabel-backends"
+version = "1.0.0"
+license = "Apache-2.0"
+description = "The model backend contract in code: SDK, stub backend, contract tests"
+requires-python = ">=3.12"
+dependencies = ["deeplabel-backend", "deeplabel-model-stub"]
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+deeplabel-backend = { path = "sdk", editable = true }
+deeplabel-model-stub = { path = "stub", editable = true }
+
+[tool.pytest.ini_options]
+testpaths = ["sdk/tests", "stub/tests"]
+
+[tool.ruff]
+line-length = 120
