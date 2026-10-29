@@ -317,6 +317,7 @@ class StubModel(Model):
             'resume': True,
             'metrics': METRICS,
             **({'line_shape': 'box'} if snapshot == 'page-lines/1' else {}),
+            **({'conventions': True} if snapshot == 'ocr-lines/1' else {}),
         }
 
     def tunables(self) -> list[dict]:

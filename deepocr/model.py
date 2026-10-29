@@ -105,6 +105,8 @@ class DeepOCRBackend(Model):
             'outputs': ['weights', 'lm', 'lm_dict'],
             'resume': True,
             'metrics': METRICS,
+            # A run conditions on each dataset's convention flags and can teach its base new ones.
+            'conventions': True,
         }
 
     def train_command(self) -> list[str]:

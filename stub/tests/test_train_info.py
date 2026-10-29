@@ -45,3 +45,14 @@ def test_only_the_ocr_trainer_builds_a_language_model(monkeypatch):
     assert StubModel().train_info()['outputs'] == ['weights', 'lm', 'lm_dict']
     monkeypatch.setenv('STUB_TRAIN_SNAPSHOT', 'page-lines/1')
     assert StubModel().train_info()['outputs'] == ['weights']
+
+
+def test_an_ocr_stub_says_it_learns_convention_flags(monkeypatch):
+    monkeypatch.setenv('STUB_TRAIN_SNAPSHOT', 'ocr-lines/1')
+    assert StubModel().train_info()['conventions'] is True
+
+
+def test_a_lines_stub_does_not(monkeypatch):
+    monkeypatch.setenv('STUB_TRAIN_SNAPSHOT', 'page-lines/1')
+    assert 'conventions' not in StubModel().train_info()
+

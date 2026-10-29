@@ -33,6 +33,20 @@ def native_snapshot(snapshot: Path, work: Path) -> Path:
     return work
 
 
+def conventions_env(snapshot: Path, work: Path) -> dict[str, str]:
+    """The convention flags the run conditions on, as the file train.py reads: the contract
+    manifest's `conventions` names the flags, the base model's first, and gives each dataset
+    of `groups` its 0/1 row. A snapshot without it trains as before."""
+    manifest = json.loads((snapshot / 'manifest.json').read_text(encoding='utf-8'))
+    conventions = manifest.get('conventions') or {}
+    if not conventions.get('names'):
+        return {}
+    path = work / 'conventions.json'
+    path.write_text(json.dumps({'names': conventions['names'], 'by_dataset': conventions.get('by_dataset', {})}),
+                    encoding='utf-8')
+    return {'TRAIN_CONVENTIONS': str(path)}
+
+
 def run_default_env(params: dict) -> dict[str, str]:
     """What a run takes where nobody chose, for the knobs DeepLabel's runs have always set."""
     by_key = {knob['key']: knob for knob in tunables.KNOBS}
@@ -85,6 +99,7 @@ def main() -> int:
     output = Path(os.environ['TRAIN_OUTPUT'])
     work = native_snapshot(Path(os.environ['TRAIN_SNAPSHOT']), Path(tempfile.mkdtemp(prefix='native-snapshot-')))
     env = {**os.environ, 'TRAIN_SNAPSHOT': str(work)}
+    env.update(conventions_env(Path(os.environ['TRAIN_SNAPSHOT']), work))
     env.update(run_default_env(params))
     env.update(legacy_env(env, tunables.KNOBS, lambda: {
         **{k['key']: k['default'] for k in tunables.declared()},

@@ -116,4 +116,7 @@ def snapshot(kind: str) -> tuple[dict[str, bytes], dict]:
     manifest = {'format': 'deeplabel-snapshot/1', 'kind': kind.split('/')[0], 'kind_version': 1, 'task': task,
                 'training_id': 0, 'splits': splits, 'groups': groups,
                 'classes': ['Header', 'Paragraph'] if kind == 'page-boxes/1' else []}
+    if kind == 'ocr-lines/1':
+        # Read by a backend that declares `conventions` (6.2), ignored by any other.
+        manifest['conventions'] = {'names': ['long_s'], 'by_dataset': {'dataset-a': [1], 'dataset-b': [0]}}
     return files, manifest
