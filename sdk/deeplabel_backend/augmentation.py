@@ -1,14 +1,18 @@
-"""What the DeepOCR trainer can augment with, for the training form's builder, and a stack
-applied to line crops the way the trainer sees them (6.2): the albumentations catalog with
-every transform's parameters classified for the builder, and a seeded preview."""
+"""What a trainer can augment with, for the training form's builder, and a stack applied
+the way the trainer applies it (7.1): the albumentations catalog with every transform's
+parameters classified for the builder, and a seeded preview - of the image alone, or of the
+image and its boxes for a trainer that is handed boxes. albumentations is imported only
+when asked for, so a backend that does not train needs none."""
 import inspect
 import re
 import warnings
+from dataclasses import dataclass
 
-from deeplabel_backend import errors
 from pydantic.errors import PydanticInvalidForJsonSchema
 
-# Need inputs a line crop cannot give (callables, reference images, spectrograms,
+from . import errors
+
+# Need inputs a page or line cannot give (callables, reference images, spectrograms,
 # volumes), or do what the trainer already does itself (normalisation, tensors).
 EXCLUDED_MODULES = ('mixing', 'transforms3d', 'spectrogram', 'text')
 EXCLUDED_NAMES = {'Lambda', 'NoOp', 'ToFloat', 'FromFloat', 'Normalize', 'ToTensorV2', 'ToTensor3D'}
@@ -131,7 +135,9 @@ def describe_transform(cls) -> dict:
     }
 
 
-def catalog() -> dict:
+def catalog(default: dict | None = None) -> dict:
+    """Every transform the builder may offer, and as `default` the stack the trainer applies
+    when a run names none, in the library's own dict form."""
     import albumentations
     from albumentations.core.transforms_interface import BasicTransform
     transforms = []
@@ -151,8 +157,15 @@ def catalog() -> dict:
             # A parameter JSON cannot describe (HEStain's ndarray) cannot be set in the form.
             continue
     transforms.sort(key=lambda t: t['name'])
-    return {'library': 'albumentations', 'version': albumentations.__version__, 'transforms': transforms,
-            'groups': GROUPS}
+    found = {'library': 'albumentations', 'version': albumentations.__version__, 'transforms': transforms,
+             'groups': GROUPS}
+    return {**found, 'default': default} if default is not None else found
+
+
+def to_spec(steps: list) -> dict:
+    """A stack of built transforms in the dict form a spec travels in, as JSON has it."""
+    import albumentations as A
+    return jsonable(A.to_dict(A.Compose(steps)))
 
 
 GROUP_NAMES = ('Compose', 'OneOf', 'SomeOf', 'Sequential')
@@ -198,15 +211,16 @@ def leaves(node: dict, path: str = ''):
 
 def build(spec: dict):
     import albumentations as A
-    # An unknown keyword is only a warning to albumentations; in a spec it is a mistake.
-    warnings.filterwarnings('error', message=r'Argument\(s\).*not valid')
-    # Leaves first, one at a time, so an error names the step it belongs to.
-    for label, node in leaves(spec['transform']):
-        try:
-            A.from_dict({'transform': node})
-        except Exception as exc:
-            raise ValueError(f'{label}: {describe(exc, building=True)}') from exc
-    return A.from_dict(spec)
+    with warnings.catch_warnings():
+        # An unknown keyword is only a warning to albumentations; in a spec it is a mistake.
+        warnings.filterwarnings('error', message=r'Argument\(s\).*not valid')
+        # Leaves first, one at a time, so an error names the step it belongs to.
+        for label, node in leaves(spec['transform']):
+            try:
+                A.from_dict({'transform': node})
+            except Exception as exc:
+                raise ValueError(f'{label}: {describe(exc, building=True)}') from exc
+        return A.from_dict(spec)
 
 
 def resize(image, height: int, max_width: int):
@@ -214,6 +228,14 @@ def resize(image, height: int, max_width: int):
     if max_width and width > max_width:
         width = max_width
     return image.resize((width, height), resample=1)
+
+
+def fit(image, max_side: int):
+    """The image no larger than max_side on its longer edge, and the factor it was scaled by."""
+    scale = min(1.0, max_side / max(image.width, image.height))
+    if scale == 1.0:
+        return image, 1.0
+    return image.resize((max(1, round(image.width * scale)), max(1, round(image.height * scale))), resample=1), scale
 
 
 def deviation(before, after) -> float:
@@ -236,27 +258,63 @@ def to_image(array):
     return Image.fromarray(array)
 
 
-def preview(spec: dict, images: list, seed: int, draws: int, height: int, max_width: int) -> list:
-    """Each image resized to the height the model reads, then put through the stack once -
-    or, over several draws, the draw that strayed furthest. A stack that cannot be built or
-    applied is refused with the step named."""
+@dataclass
+class Augmented:
+    """One preview image, and for a stack applied with boxes, where each box went: in the
+    order they were given, in this image's pixels, None for one the draw cut away."""
+    image: object
+    boxes: list | None = None
+
+
+def with_boxes(pipeline):
+    import albumentations as A
+    return A.Compose(pipeline.transforms, p=pipeline.p, bbox_params=A.BboxParams(
+        format='pascal_voc', label_fields=['indices'], clip=True, min_visibility=0.0))
+
+
+def preview(spec: dict, images: list, seed: int, draws: int, *, height: int | None = None, max_width: int = 0,
+            max_side: int | None = None, boxes: list | None = None) -> list[Augmented]:
+    """Each image as the trainer is handed it - a line at the height the model reads, a page
+    no larger than max_side - put through the stack once, or over several draws the draw
+    that strayed furthest. Given boxes (per image, [x0, y0, x1, y1] in its pixels), they go
+    through the stack with it. A stack that cannot be built or applied is refused with the
+    step named."""
     import numpy as np
     try:
         pipeline = build(spec)
     except Exception as exc:
         raise errors.bad_request(str(exc) if isinstance(exc, ValueError) else describe(exc)) from exc
+    if boxes is not None:
+        pipeline = with_boxes(pipeline)
     pipeline.set_random_seed(seed)
     shown = []
     for index, image in enumerate(images):
-        source = np.array(resize(image.convert('RGB'), height, max_width))
+        image = image.convert('RGB')
+        scale = 1.0
+        if height:
+            image = resize(image, height, max_width)
+        elif max_side:
+            image, scale = fit(image, max_side)
+        source = np.array(image)
+        given = None
+        if boxes is not None:
+            given = [[max(0.0, min(v * scale, limit)) for v, limit in zip(box, (image.width, image.height) * 2)]
+                     for box in boxes[index]]
         kept, worst = None, -1.0
         for _ in range(max(1, draws)):
             try:
-                augmented = pipeline(image=source)['image']
+                drawn = (pipeline(image=source) if given is None
+                         else pipeline(image=source, bboxes=np.array(given, dtype='float32').reshape(-1, 4),
+                                       indices=list(range(len(given)))))
             except Exception as exc:
                 raise errors.bad_request(f'image {index}: {describe(exc)}') from exc
-            score = deviation(source, augmented)
+            score = deviation(source, drawn['image'])
             if score > worst:
-                kept, worst = augmented, score
-        shown.append(to_image(kept))
+                kept, worst = drawn, score
+        moved = None
+        if given is not None:
+            moved = [None] * len(given)
+            for box, at in zip(kept['bboxes'], kept['indices']):
+                moved[int(at)] = [round(float(v), 2) for v in box]
+        shown.append(Augmented(to_image(kept['image']), moved))
     return shown

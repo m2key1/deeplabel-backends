@@ -28,7 +28,7 @@ def test_the_catalogue_has_every_field_kind_and_a_default_stack():
 
 
 def test_a_sound_stack_inverts_each_image():
-    assert preview(stack({'__class_fullname__': 'InvertImg', 'p': 1.0}))[0].getpixel((0, 0)) == (0, 0, 0)
+    assert preview(stack({'__class_fullname__': 'InvertImg', 'p': 1.0}))[0].image.getpixel((0, 0)) == (0, 0, 0)
 
 
 def test_a_range_whose_low_end_exceeds_its_high_end_is_refused_naming_the_step():
@@ -57,5 +57,11 @@ def test_the_harshest_of_many_draws_is_more_mangled_than_one():
     spec = stack({'__class_fullname__': 'InvertImg', 'p': 1.0})
     [one] = StubModel().augmentation_preview(spec, [image], 0, 1)
     [harshest] = StubModel().augmentation_preview(spec, [image], 0, 12)
-    assert one.getpixel((0, 0)) == (155, 105, 55)
-    assert harshest.getpixel((0, 0)) == (128, 0, 0)
+    assert one.image.getpixel((0, 0)) == (155, 105, 55)
+    assert harshest.image.getpixel((0, 0)) == (128, 0, 0)
+
+
+def test_boxes_come_back_where_they_went_in():
+    page = Image.new('RGB', (40, 10), 'white')
+    [shown] = StubModel().augmentation_preview(stack(), [page], 0, 1, boxes=[[[1, 2, 30, 8]]])
+    assert shown.boxes == [[1, 2, 30, 8]]

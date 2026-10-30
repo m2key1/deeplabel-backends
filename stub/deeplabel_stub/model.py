@@ -3,6 +3,7 @@ import time
 from pathlib import Path
 
 from deeplabel_backend import Loaded, Model, Prediction, errors
+from deeplabel_backend.augmentation import Augmented
 from PIL import ImageOps
 
 ELEMENT_SPECS = [
@@ -311,7 +312,8 @@ class StubModel(Model):
                           'memory_per_gpu_gb': 4, 'default_batch': {'local': 8, 'cluster': 22},
                           'batch_by_gpu': {'rtx5090': 8, 'rtx6000bb': 16, 'h200': 32}, 'effective_batch': 16},
             'tunables': [{k: v for k, v in t.items() if k != 'env'} for t in train_tunables()],
-            'augmentation': {'library': 'albumentations', 'version': 'stub', 'targets': ['image']},
+            'augmentation': {'library': 'albumentations', 'version': 'stub',
+                             'targets': sorted(SNAPSHOT_TARGETS[snapshot])},
             'default_epochs': len(TRAIN_EPOCHS),
             'outputs': ['weights', 'lm', 'lm_dict'] if snapshot == 'ocr-lines/1' else ['weights'],
             'resume': True,
@@ -326,10 +328,12 @@ class StubModel(Model):
     def augmentations(self) -> dict:
         return AUGMENTATIONS
 
-    def augmentation_preview(self, spec, images, seed, draws):
-        error = stack_error(spec['transform'], SNAPSHOT_TARGETS[train_snapshot()])
+    def augmentation_preview(self, spec, images, seed, draws, boxes=None):
+        error = stack_error(spec['transform'], SNAPSHOT_TARGETS[train_snapshot()] | ({'bboxes'} if boxes else set()))
         if error:
             raise errors.bad_request(error)
         drawn = [ImageOps.invert(image.convert('RGB')) for image in images]
         # The harshest of several draws is simply the more mangled one.
-        return drawn if draws <= 1 else [ImageOps.posterize(image, 1) for image in drawn]
+        drawn = drawn if draws <= 1 else [ImageOps.posterize(image, 1) for image in drawn]
+        # A box comes back where it went in, so a scenario can tell it was carried through.
+        return [Augmented(image, boxes[index] if boxes is not None else None) for index, image in enumerate(drawn)]

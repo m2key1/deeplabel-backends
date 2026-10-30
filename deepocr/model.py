@@ -4,10 +4,10 @@ import unicodedata
 from pathlib import Path
 
 import torch
-from deeplabel_backend import Loaded, Model, Prediction
+from deeplabel_backend import Loaded, Model, Prediction, augmentation
 
 import infer
-from deepocr import BUILTIN_DIR, BUILTIN_FILES, augmentation, tunables
+from deepocr import BUILTIN_DIR, BUILTIN_FILES, tunables
 from deepocr.engine import DECODES, DeepOCREngine
 
 VERSION = '1.0.0'
@@ -117,9 +117,9 @@ class DeepOCRBackend(Model):
         return [{k: v for k, v in knob.items() if k != 'env'} for knob in tunables.declared()]
 
     def augmentations(self) -> dict:
-        return augmentation.catalog()
+        return augmentation.catalog(tunables.default_augmentation())
 
-    def augmentation_preview(self, spec, images, seed, draws):
+    def augmentation_preview(self, spec, images, seed, draws, boxes=None):
         found = tunables.constants()
-        return augmentation.preview(spec, images, seed, draws, found.get('TARGET_HEIGHT', 128),
-                                    found.get('MAX_WIDTH', 3072))
+        return augmentation.preview(spec, images, seed, draws, height=found.get('TARGET_HEIGHT', 128),
+                                    max_width=found.get('MAX_WIDTH', 3072))

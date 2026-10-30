@@ -323,6 +323,25 @@ def constants() -> dict:
     return json.loads(done.stdout.strip().splitlines()[-1])
 
 
+STACK_PROBE = """
+import importlib, json, os, sys
+sys.path.insert(0, '.')
+os.environ.pop('TRAIN_AUGMENT', None)
+import albumentations as A
+print(json.dumps(A.to_dict(importlib.import_module('train').get_transforms()[0])))
+"""
+
+
+@functools.cache
+def default_augmentation() -> dict:
+    """The stack train.py applies when a run names none, as get_transforms() builds it."""
+    done = subprocess.run([sys.executable, '-c', STACK_PROBE], cwd=MODEL_REPO, capture_output=True, text=True,
+                          timeout=PROBE_TIMEOUT)
+    if done.returncode:
+        raise RuntimeError(f'train.py could not be read for its augmentation: {done.stderr.strip()[-300:]}')
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
 def default(knob: dict, found: dict):
     if knob['key'] in RUN_DEFAULTS:
         return RUN_DEFAULTS[knob['key']]

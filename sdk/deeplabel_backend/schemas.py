@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT = '1.3'
+CONTRACT = '1.4'
 TASKS = ('layout', 'lines', 'ocr', 'map_segmentation', 'edges')
 WEIGHT_ROLES = ('weights', 'lm', 'lm_dict', 'config')
 SNAPSHOT_FORMAT = 'deeplabel-snapshot/1'
@@ -90,6 +90,8 @@ class PreviewRequest(Message):
     spec: dict[str, Any]
     seed: int = 0
     draws: int = 1
+    # Per image, its boxes as [x0, y0, x1, y1] in the image's pixels, for a trainer handed boxes.
+    boxes: list[list[list[float]]] | None = None
 
 
 class Health(Message):
