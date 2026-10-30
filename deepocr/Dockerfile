@@ -30,6 +30,9 @@ RUN pip install --no-cache-dir /opt/deeplabel-sdk
 COPY --from=model . /srv/model
 COPY deepocr /srv/deepocr
 ENV PYTHONPATH=/srv PORT=9100 MODEL_CACHE_DIR=/cache
+# albumentations otherwise asks PyPI for a newer release on every import, which a cluster
+# node without internet waits out each time.
+ENV NO_ALBUMENTATIONS_UPDATE=1
 # Multi-megabyte arrays freed by another thread than the one that allocated them stay
 # with glibc unless it hands them back early; without this the server grows without bound.
 ENV MALLOC_MMAP_THRESHOLD_=262144 MALLOC_TRIM_THRESHOLD_=262144
