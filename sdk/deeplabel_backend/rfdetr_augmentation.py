@@ -1,9 +1,10 @@
 """An RF-DETR trainer's augmentation in the albumentations form DeepLabel's builder edits
-(7.1), and back. RF-DETR takes its stack as `aug_config`, a list of {name: params}, builds
-it step by step, skips a step it cannot build with only a log line, moves boxes and masks
-only through the steps it lists as geometric, and runs a OneOf or Sequential group every
-time whatever its p. A stack is checked against all four here, so a run fails at the start
-rather than training on something else than was chosen."""
+(7.1), and back. RF-DETR trains with its stack as `aug_config`, a dict of {name: params} in
+order, so it takes each step once; it builds the stack step by step, skips a step it cannot
+build with only a log line, moves boxes and masks only through the steps it lists as
+geometric, and runs a OneOf or Sequential group every time whatever its p. A stack is
+checked against all of these here, so a run fails at the start rather than training on
+something else than was chosen."""
 from . import augmentation
 
 CONTAINERS = ('OneOf', 'SomeOf', 'Sequential')
@@ -60,16 +61,21 @@ def problem(node: dict, geometric: frozenset[str], carried: str, path: str = '')
     return None
 
 
-def to_aug_config(spec: dict, carried: str, geometric: frozenset[str] | None = None) -> list:
+def to_aug_config(spec: dict, carried: str, geometric: frozenset[str] | None = None) -> dict:
     """A spec as RF-DETR's aug_config, or ValueError naming the step it cannot take.
     `carried` names what the page's annotations are to the reader: boxes, lines."""
     augmentation.build(spec)
-    root = spec['transform']
-    for index, node in enumerate(root.get('transforms', [])):
-        found = problem(node, geometric_steps() if geometric is None else geometric, carried, f'Compose[{index}].')
+    config = {}
+    for index, node in enumerate(spec['transform'].get('transforms', [])):
+        label = f'Compose[{index}].'
+        found = problem(node, geometric_steps() if geometric is None else geometric, carried, label)
         if found:
             raise ValueError(found)
-    return [entry(node) for node in root.get('transforms', [])]
+        [(name, params)] = entry(node).items()
+        if name in config:
+            raise ValueError(f'{label}{name}: RF-DETR takes each step once - put the copies in a group')
+        config[name] = params
+    return config
 
 
 def entry(node: dict) -> dict:
