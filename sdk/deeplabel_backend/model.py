@@ -67,7 +67,8 @@ class Model:
         return {}
 
     def augmentation_preview(self, spec: dict, images: list[Image.Image], seed: int, draws: int,
-                             boxes: list | None = None) -> list:
-        """The images through the stack, as augmentation.Augmented (or plain images when no
-        boxes were given); augmentation.preview does it for an albumentations trainer."""
+                             boxes: list | None = None, polygons: list | None = None) -> list:
+        """The images through the stack, as augmentation.Augmented (or plain images when
+        neither boxes nor line outlines were given); augmentation.preview does it for an
+        albumentations trainer."""
         raise NotImplementedError

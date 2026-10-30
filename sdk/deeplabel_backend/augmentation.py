@@ -1,8 +1,8 @@
 """What a trainer can augment with, for the training form's builder, and a stack applied
 the way the trainer applies it (7.1): the albumentations catalog with every transform's
 parameters classified for the builder, and a seeded preview - of the image alone, or of the
-image and its boxes for a trainer that is handed boxes. albumentations is imported only
-when asked for, so a backend that does not train needs none."""
+image with its boxes or its line outlines for a trainer that is handed those. albumentations
+is imported only when asked for, so a backend that does not train needs none."""
 import inspect
 import re
 import warnings
@@ -126,7 +126,7 @@ def describe_transform(cls) -> dict:
                        **classify(prop, default)})
     p_default = signature['p'].default if 'p' in signature and signature['p'].default is not inspect.Parameter.empty else 0.5
     return {
-        'name': cls.__name__,
+        'name': cls.get_class_fullname(),
         'category': cls.__module__.split('.')[2] if cls.__module__.startswith('albumentations.augmentations.') else 'other',
         'targets': [t.name.lower() for t in getattr(cls, '_targets', ()) if t.name.lower() in TARGETS],
         'doc': summary(cls.__doc__),
@@ -135,9 +135,10 @@ def describe_transform(cls) -> dict:
     }
 
 
-def catalog(default: dict | None = None) -> dict:
+def catalog(default: dict | None = None, extra: tuple = ()) -> dict:
     """Every transform the builder may offer, and as `default` the stack the trainer applies
-    when a run names none, in the library's own dict form."""
+    when a run names none, in the library's own dict form. `extra` are the trainer's own
+    transform classes, offered under the name a spec carries them by (module and class)."""
     import albumentations
     from albumentations.core.transforms_interface import BasicTransform
     transforms = []
@@ -156,6 +157,7 @@ def catalog(default: dict | None = None) -> dict:
         except PydanticInvalidForJsonSchema:
             # A parameter JSON cannot describe (HEStain's ndarray) cannot be set in the form.
             continue
+    transforms += [describe_transform(cls) for cls in extra]
     transforms.sort(key=lambda t: t['name'])
     found = {'library': 'albumentations', 'version': albumentations.__version__, 'transforms': transforms,
              'groups': GROUPS}
@@ -260,10 +262,12 @@ def to_image(array):
 
 @dataclass
 class Augmented:
-    """One preview image, and for a stack applied with boxes, where each box went: in the
-    order they were given, in this image's pixels, None for one the draw cut away."""
+    """One preview image, and for a stack applied with boxes or line outlines, where each
+    went: in the order they were given, in this image's pixels, None for one the draw cut
+    away."""
     image: object
     boxes: list | None = None
+    polygons: list | None = None
 
 
 def with_boxes(pipeline):
@@ -272,13 +276,43 @@ def with_boxes(pipeline):
         format='pascal_voc', label_fields=['indices'], clip=True, min_visibility=0.0))
 
 
+def instances(polygons: list, width: int, height: int):
+    """The outlines drawn into one mask, the n-th filled with n + 1 - the form a line
+    trainer is handed its lines in."""
+    import cv2
+    import numpy as np
+    mask = np.zeros((height, width), dtype='uint16')
+    for number, polygon in enumerate(polygons, start=1):
+        cv2.fillPoly(mask, [np.round(np.array(polygon, dtype='float64')).astype('int32')], number)
+    return mask
+
+
+def outlines(mask, count: int) -> list:
+    """Each instance of the mask as the outline of its largest piece, None for one no pixel
+    of which is left."""
+    import cv2
+    import numpy as np
+    found = []
+    for number in range(1, count + 1):
+        contours, _ = cv2.findContours((mask == number).astype(np.uint8), cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            found.append(None)
+            continue
+        largest = cv2.approxPolyDP(max(contours, key=cv2.contourArea), 1.0, True)
+        found.append([[float(x), float(y)] for [[x, y]] in largest])
+    return found
+
+
 def preview(spec: dict, images: list, seed: int, draws: int, *, height: int | None = None, max_width: int = 0,
-            max_side: int | None = None, boxes: list | None = None) -> list[Augmented]:
+            max_side: int | None = None, boxes: list | None = None,
+            polygons: list | None = None) -> list[Augmented]:
     """Each image as the trainer is handed it - a line at the height the model reads, a page
     no larger than max_side - put through the stack once, or over several draws the draw
     that strayed furthest. Given boxes (per image, [x0, y0, x1, y1] in its pixels), they go
-    through the stack with it. A stack that cannot be built or applied is refused with the
-    step named."""
+    through the stack with it; given line outlines (per image, polygons of [x, y]), they go
+    through it as the instance mask a line trainer is handed. A stack that cannot be built
+    or applied is refused with the step named."""
     import numpy as np
     try:
         pipeline = build(spec)
@@ -296,16 +330,18 @@ def preview(spec: dict, images: list, seed: int, draws: int, *, height: int | No
         elif max_side:
             image, scale = fit(image, max_side)
         source = np.array(image)
-        given = None
+        given, inputs = None, {'image': source}
         if boxes is not None:
             given = [[max(0.0, min(v * scale, limit)) for v, limit in zip(box, (image.width, image.height) * 2)]
                      for box in boxes[index]]
+            inputs |= {'bboxes': np.array(given, dtype='float32').reshape(-1, 4), 'indices': list(range(len(given)))}
+        if polygons is not None:
+            inputs['mask'] = instances([[[x * scale, y * scale] for x, y in polygon] for polygon in polygons[index]],
+                                       image.width, image.height)
         kept, worst = None, -1.0
         for _ in range(max(1, draws)):
             try:
-                drawn = (pipeline(image=source) if given is None
-                         else pipeline(image=source, bboxes=np.array(given, dtype='float32').reshape(-1, 4),
-                                       indices=list(range(len(given)))))
+                drawn = pipeline(**inputs)
             except Exception as exc:
                 raise errors.bad_request(f'image {index}: {describe(exc)}') from exc
             score = deviation(source, drawn['image'])
@@ -316,5 +352,6 @@ def preview(spec: dict, images: list, seed: int, draws: int, *, height: int | No
             moved = [None] * len(given)
             for box, at in zip(kept['bboxes'], kept['indices']):
                 moved[int(at)] = [round(float(v), 2) for v in box]
-        shown.append(Augmented(to_image(kept['image']), moved))
+        traced = outlines(kept['mask'], len(polygons[index])) if polygons is not None else None
+        shown.append(Augmented(to_image(kept['image']), moved, traced))
     return shown

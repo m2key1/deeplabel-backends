@@ -328,12 +328,14 @@ class StubModel(Model):
     def augmentations(self) -> dict:
         return AUGMENTATIONS
 
-    def augmentation_preview(self, spec, images, seed, draws, boxes=None):
-        error = stack_error(spec['transform'], SNAPSHOT_TARGETS[train_snapshot()] | ({'bboxes'} if boxes else set()))
+    def augmentation_preview(self, spec, images, seed, draws, boxes=None, polygons=None):
+        supplied = {'bboxes'} if boxes else set()
+        error = stack_error(spec['transform'], SNAPSHOT_TARGETS[train_snapshot()] | supplied)
         if error:
             raise errors.bad_request(error)
         drawn = [ImageOps.invert(image.convert('RGB')) for image in images]
         # The harshest of several draws is simply the more mangled one.
         drawn = drawn if draws <= 1 else [ImageOps.posterize(image, 1) for image in drawn]
-        # A box comes back where it went in, so a scenario can tell it was carried through.
-        return [Augmented(image, boxes[index] if boxes is not None else None) for index, image in enumerate(drawn)]
+        # A box or outline comes back where it went in, so a scenario can tell it was carried through.
+        return [Augmented(image, boxes[index] if boxes is not None else None,
+                          polygons[index] if polygons is not None else None) for index, image in enumerate(drawn)]

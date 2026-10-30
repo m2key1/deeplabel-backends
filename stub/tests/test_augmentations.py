@@ -65,3 +65,10 @@ def test_boxes_come_back_where_they_went_in():
     page = Image.new('RGB', (40, 10), 'white')
     [shown] = StubModel().augmentation_preview(stack(), [page], 0, 1, boxes=[[[1, 2, 30, 8]]])
     assert shown.boxes == [[1, 2, 30, 8]]
+
+
+def test_line_outlines_come_back_where_they_went_in():
+    page = Image.new('RGB', (40, 10), 'white')
+    outline = [[1, 2], [30, 2], [30, 8], [1, 8]]
+    [shown] = StubModel().augmentation_preview(stack(), [page], 0, 1, polygons=[[outline]])
+    assert shown.polygons == [outline]

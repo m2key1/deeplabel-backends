@@ -243,13 +243,17 @@ def create_app(model: Model, secret: str | None = None, cache_dir: Path | None =
         body = _json(await part.read() if hasattr(part, 'read') else part, PreviewRequest)
         images = [_decode(await value.read()) for key, value in form.multi_items()
                   if key != 'request' and hasattr(value, 'read')]
-        if body.boxes is not None and len(body.boxes) != len(images):
-            raise errors.bad_request(f'boxes are given for {len(body.boxes)} images, not the {len(images)} sent')
-        extra = {'boxes': body.boxes} if body.boxes is not None else {}
+        extra = {}
+        for name in ('boxes', 'polygons'):
+            given = getattr(body, name)
+            if given is not None:
+                if len(given) != len(images):
+                    raise errors.bad_request(f'{name} are given for {len(given)} images, not the {len(images)} sent')
+                extra[name] = given
         drawn = await run_in_threadpool(model.augmentation_preview, body.spec, images, body.seed, body.draws, **extra)
         shown = [item if isinstance(item, Augmented) else Augmented(item) for item in drawn]
         return {'images': [_png_data_url(item.image) for item in shown],
-                **({'boxes': [item.boxes or [] for item in shown]} if body.boxes is not None else {})}
+                **{name: [getattr(item, name) or [] for item in shown] for name in extra}}
 
     @app.get('/v1/train/{train_id}')
     def training_state(train_id: str):
