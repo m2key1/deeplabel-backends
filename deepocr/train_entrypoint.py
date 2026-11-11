@@ -9,6 +9,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import torch
+
 # Started by path, in the run's own directory: the wrappers are not on the path by themselves.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -47,11 +49,12 @@ def conventions_env(snapshot: Path, work: Path) -> dict[str, str]:
     return {'TRAIN_CONVENTIONS': str(path)}
 
 
-def run_default_env(params: dict) -> dict[str, str]:
-    """What a run takes where nobody chose, for the knobs DeepLabel's runs have always set."""
+def run_default_env(params: dict, base_decoder: str | None = None) -> dict[str, str]:
+    """What a run takes where nobody chose, for the knobs DeepLabel's runs have always set and
+    those the base model's decoder sets."""
     by_key = {knob['key']: knob for knob in tunables.KNOBS}
     env = {}
-    for key, value in tunables.run_defaults(params.get('hyperparams') or {}).items():
+    for key, value in tunables.run_defaults(params.get('hyperparams') or {}, base_decoder).items():
         for name in by_key[key]['env']:
             env[name] = str(value)
     return env
@@ -82,6 +85,19 @@ def base_env(base: Path) -> dict[str, str]:
     return {}
 
 
+def base_decoder(base: Path) -> str | None:
+    """The kind of decoder the run starts from, read from the base checkpoint; None from scratch.
+    Memory-mapped, so a large checkpoint is not read into memory to answer it."""
+    if (base / BUILTIN_MARKER).exists():
+        checkpoint_path = BUILTIN_DIR / BUILTIN_FILES['weights']
+    elif (base / 'weights').is_file():
+        checkpoint_path = base / 'weights'
+    else:
+        return None
+    checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False, mmap=True)
+    return checkpoint.get('decoder_type', 'char')
+
+
 def builtin_language_model(output: Path) -> list[dict]:
     """The builtin's KenLM, listed by role: a fine-tune keeps the builtin's byte vocabulary,
     so its LM stays index-parallel."""
@@ -100,10 +116,11 @@ def main() -> int:
     work = native_snapshot(Path(os.environ['TRAIN_SNAPSHOT']), Path(tempfile.mkdtemp(prefix='native-snapshot-')))
     env = {**os.environ, 'TRAIN_SNAPSHOT': str(work)}
     env.update(conventions_env(Path(os.environ['TRAIN_SNAPSHOT']), work))
-    env.update(run_default_env(params))
+    decoder = base_decoder(Path(os.environ['TRAIN_BASE']))
+    env.update(run_default_env(params, decoder))
     env.update(legacy_env(env, tunables.KNOBS, lambda: {
         **{k['key']: k['default'] for k in tunables.declared()},
-        **tunables.run_defaults(params.get('hyperparams') or {})}))
+        **tunables.run_defaults(params.get('hyperparams') or {}, decoder)}))
     # A cluster run resubmitted after its time limit (6.9) continues from the rolling checkpoint
     # train.py keeps in its run directory: weights, optimiser, schedule, epoch and best CER.
     env.update(base_env(Path(os.environ['TRAIN_BASE'])))

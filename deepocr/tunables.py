@@ -43,6 +43,16 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'constants': ['DECODER_BASE_LR'],
   'env': ['TRAIN_DECODER_BASE_LR'],
   'above': 0},
+ {'key': 'token_decoder_lr', 'role': 'learning_rate',
+  'label': 'Decoder cross-attention rate',
+  'group': 'Schedule',
+  'kind': 'float',
+  'help': "Peak rate for the cross-attention layers that connect a token decoder to the encoder. "
+          'A model with a character decoder ignores it.',
+  'constants': ['TOKEN_DECODER_NEW_LR'],
+  'env': ['TRAIN_TOKEN_DECODER_NEW_LR'],
+  'above': 0,
+  'defaults_by_decoder': {'token': 1e-4}},
  {'key': 'warmup_epochs',
   'label': 'Warmup epochs',
   'group': 'Schedule',
@@ -108,7 +118,8 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'constants': ['DECODER_LABEL_SMOOTHING'],
   'env': ['TRAIN_DECODER_LABEL_SMOOTHING'],
   'min': 0,
-  'max': 1},
+  'max': 1,
+  'defaults_by_decoder': {'token': 0.0}},
  {'key': 'decoder_eos_weight',
   'label': 'End-of-sequence weight',
   'group': 'Loss',
@@ -232,7 +243,8 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'kind': 'bool',
   'help': 'Keep the checkpoint with the best decoder CER instead of the best CTC CER.',
   'constants': ['SELECT_ON_DECODER'],
-  'env': ['TRAIN_SELECT_ON_DECODER']},
+  'env': ['TRAIN_SELECT_ON_DECODER'],
+  'defaults_by_decoder': {'token': True}},
  {'key': 'save_best_of_heads',
   'label': 'Save best of either head',
   'group': 'Validation',
@@ -356,9 +368,13 @@ def declared() -> list[dict]:
             for knob in KNOBS]
 
 
-def run_defaults(chosen: dict) -> dict:
-    """The knobs a run takes for itself, minus any its own choices rule out."""
-    defaults = dict(RUN_DEFAULTS)
-    if any(chosen.get(knob) for knob in SELECTS_ON_DECODER):
+def run_defaults(chosen: dict, base_decoder: str | None = None) -> dict:
+    """The knobs a run takes for itself, minus any its own choices rule out: DeepLabel's own,
+    and the ones a knob sets for the base model's kind of decoder. A token decoder fine-tunes
+    as it was trained: a gentler cross-attention rate, no label smoothing, and the checkpoint
+    picked on the decoder's reading, the one it is read with."""
+    defaults = {**RUN_DEFAULTS, **{knob['key']: knob['defaults_by_decoder'][base_decoder] for knob in KNOBS
+                                   if base_decoder in knob.get('defaults_by_decoder', {})}}
+    if any({**defaults, **chosen}.get(knob) for knob in SELECTS_ON_DECODER):
         defaults.pop('decoder_val_frequency', None)
     return {key: value for key, value in defaults.items() if key not in chosen}
