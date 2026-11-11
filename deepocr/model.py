@@ -67,7 +67,7 @@ class DeepOCRBackend(Model):
         return Loaded(handle=engine, facts={'target_height': engine.model.target_height,
                                             'max_width': engine.model.max_width or 0,
                                             'conventions': engine.convention_names, 'lm_loaded': engine.lm_on,
-                                            'builtin': builtin})
+                                            'decoder': engine.decoder_type, 'builtin': builtin})
 
     def unload(self, loaded: Loaded) -> None:
         loaded.handle.close()

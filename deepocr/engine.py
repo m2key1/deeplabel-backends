@@ -15,7 +15,7 @@ import infer
 from deepocr.conf_profile import character_profile, uniform_profile
 from deepocr.gpu_resize import resize_lines
 
-DECODES = ('beam', 'rescored', 'greedy')
+DECODES = ('beam', 'rescored', 'greedy', 'decoder')
 # The KenLM beam search runs on the CPU, one line after another; the lines of a batch are
 # split over this many worker processes, each with its own decoder: 39.6 lines/s with eight
 # on the 5090 against 12.5 in this process, the same text. 0 decodes in this process.
@@ -54,12 +54,18 @@ def _beam(log_probs: np.ndarray, lengths: np.ndarray, beam_width: int) -> list[s
                                                beam_width=beam_width)
 
 
+def spread_over_bytes(token_probs: torch.Tensor, byte_counts: torch.Tensor) -> list[list[float]]:
+    """Each row's token probabilities, repeated once per byte the token spells. End and padding
+    tokens spell none, so they drop out."""
+    return [torch.repeat_interleave(probs, counts).tolist() for probs, counts in zip(token_probs, byte_counts)]
+
+
 def resolve_decode(decode: str, lm_on: bool, use_decoder: bool) -> str:
     """The mode that will actually run, given what this version carries: one whose machinery
     is missing degrades rather than failing (4.5)."""
     if decode == 'beam' and not lm_on:
         return 'rescored' if use_decoder else 'greedy'
-    if decode == 'rescored' and not use_decoder:
+    if decode in ('rescored', 'decoder') and not use_decoder:
         return 'beam' if lm_on else 'greedy'
     return decode if decode in DECODES else 'greedy'
 
@@ -68,7 +74,8 @@ class DeepOCREngine:
     """DeepOCR (CTC head + AR decoder) from the DeepOCR repo, decoded per its
     inference doc. Default decode is CTC beam search with the fused union char-KenLM
     (DeepOCR's shipped best setup); without the LM artifact it falls back to CTC beam
-    n-best reranked by the AR decoder. Batched. Confidence is the AR decoder's
+    n-best reranked by the AR decoder. A subword (token) decoder reads the line itself in
+    the 'decoder' decode. Batched. Confidence is the AR decoder's
     per-character probability of the produced text (a decode-path-independent signal)."""
 
     BEAM_WIDTH = 4
@@ -92,6 +99,8 @@ class DeepOCREngine:
         # check_kenlm_artifacts may refuse an LM that is not index-parallel to this vocab.
         self.lm_on = self.lm_on and bool(getattr(self.tokenizer, 'kenlm_path', None))
         self.decode = 'beam'
+        # 'token' for a subword decoder, whose own reading is the 'decoder' decode; None without one.
+        self.decoder_type = getattr(self.model, 'decoder_type', 'char') if self.model.use_decoder else None
         # Older checkpoints are not conditioned on a convention and their _encode takes none.
         self.convention_names = list(getattr(self.model, 'convention_names', None) or [])
         self._convention_row = None
@@ -105,6 +114,7 @@ class DeepOCREngine:
         normalize = self._infer._NORMALIZE.transforms[0]
         self._mean = torch.tensor(normalize.mean, device=device).view(1, 3, 1, 1)
         self._std = torch.tensor(normalize.std, device=device).view(1, 3, 1, 1)
+        self._white = (1.0 - self._mean) / self._std
         self.decoders = None
         if self.lm_on and DECODE_WORKERS:
             self.decoders = _decoder_pool(self.tokenizer)
@@ -145,7 +155,9 @@ class DeepOCREngine:
         x = resize_lines(torch.from_numpy(native).to(self.device), torch.tensor(heights, device=self.device),
                          torch.tensor(widths, device=self.device), target_h, new_w, batch_w)
         x = (x / 255.0 - self._mean) / self._std
-        x = x.masked_fill(torch.arange(batch_w, device=self.device)[None, None, None, :] >= new_w[:, None, None, None], 1.0)
+        # White, as DeepOCR pads its lines in training.
+        padding = torch.arange(batch_w, device=self.device)[None, None, None, :] >= new_w[:, None, None, None]
+        x = torch.where(padding, self._white, x)
 
         num_ph, num_pw = target_h // self.model.patch_size, batch_w // ps_w
         real = torch.tensor(target_ws) // ps_w
@@ -206,6 +218,8 @@ class DeepOCREngine:
     def _decoder_token_probs(self, memory, mem_mask, texts):
         """Per-token probability the AR decoder - the path that produces the rescored text -
         assigns to each token it emitted. One teacher-forced pass over the winning hypotheses."""
+        if getattr(self.model, 'decoder_type', 'char') == 'token':
+            return self._subword_probs_per_byte(memory, mem_mask, texts)
         device = memory.device
         encoded = [self.tokenizer.encode(t) for t in texts]
         target_lengths = torch.tensor([len(s) for s in encoded], dtype=torch.long, device=device)
@@ -220,6 +234,16 @@ class DeepOCREngine:
         token_probs = probs.gather(2, decoder_target.unsqueeze(-1)).squeeze(-1)    # [N, L]
         # The EOS position is excluded: it is not a character the user can look at.
         return [token_probs[i, :int(target_lengths[i].item())].tolist() for i in range(len(texts))]
+
+    def _subword_probs_per_byte(self, memory, mem_mask, texts):
+        """A token decoder emits subwords; each one's probability goes to every byte it spells,
+        so it lines up with the CTC head's byte-level alignment like a byte decoder's would."""
+        decoder = self.model.decoder
+        inputs, targets, padding = decoder.build_io(texts, memory.device)
+        logits = self.model._decode_teacher_forced(memory, mem_mask, inputs, padding)
+        probs = F.softmax(logits.float(), dim=-1).permute(1, 0, 2)
+        token_probs = probs.gather(2, targets.unsqueeze(-1)).squeeze(-1)
+        return spread_over_bytes(token_probs, decoder.token_bytes[targets])
 
     def honoured(self, convention: dict[str, bool]) -> list[str]:
         """The flags a read asks the model for that it knows, in the model's own order; a
@@ -252,6 +276,11 @@ class DeepOCREngine:
             texts = [self.tokenizer.ctc_decode(preds[i, :in_lens[i].item()].tolist(),
                                                skip_special_tokens=True)
                      for i in range(len(chunk))]
+        elif self.decode == 'decoder':
+            # The token decoder's beam, reranked by how well the CTC head reads each candidate.
+            with torch.autocast(device_type=self.device.type, dtype=torch.bfloat16,
+                                enabled=self.device.type == 'cuda'):
+                texts = self.model.decode_text(memory, mem_mask)
         elif self.decode == 'beam':
             # CTC beam search with the model's own KenLM fused in.
             texts = self._beam_search(log_probs, in_lens)
