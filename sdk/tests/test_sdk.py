@@ -308,6 +308,62 @@ def test_a_failure_that_is_not_memory_is_not_retried(tmp_path):
     assert json.loads((tmp_path / 'params.json').read_text())['batch_size'] == 8
 
 
+# Writes its first part, waits until the test has seen it relayed, then writes the rest.
+TWO_PART_ENTRYPOINT = """
+import pathlib, sys, time
+first, rest, released, code = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3]), int(sys.argv[4])
+sys.stdout.write(first)
+sys.stdout.flush()
+deadline = time.monotonic() + 5
+while not released.exists() and time.monotonic() < deadline:
+    time.sleep(0.05)
+sys.stdout.write(rest if released.exists() else 'never released\\n')
+sys.exit(code)
+"""
+
+
+class ReleasingStdout:
+    """Our stdout as the fallback relays into it; it releases the entrypoint once the first part is through."""
+
+    def __init__(self, first: str, released: Path):
+        self.buffer = self
+        self.written = b''
+        self.first = first.encode()
+        self.released = released
+
+    def write(self, data: bytes):
+        self.written += data
+        if self.first in self.written:
+            self.released.touch()
+
+    def flush(self):
+        pass
+
+
+def relay_two_parts(tmp_path, monkeypatch, first: str, rest: str, code: int) -> tuple[ReleasingStdout, tuple[int, bool]]:
+    from deeplabel_backend import fallback
+    script = tmp_path / 'train.py'
+    script.write_text(TWO_PART_ENTRYPOINT)
+    relayed = ReleasingStdout(first, tmp_path / 'released')
+    monkeypatch.setattr(sys, 'stdout', relayed)
+    result = fallback._run_once([sys.executable, str(script), first, rest, str(tmp_path / 'released'), str(code)])
+    return relayed, result
+
+
+def test_a_progress_bar_redrawn_without_a_newline_reaches_the_log_while_the_run_goes_on(tmp_path, monkeypatch):
+    relayed, result = relay_two_parts(tmp_path, monkeypatch, 'Epoch 1/60:  50%\r', 'Epoch 1/60: 100%\n', code=0)
+
+    assert result == (0, False)
+    assert relayed.written == b'Epoch 1/60:  50%\rEpoch 1/60: 100%\n'
+
+
+def test_an_out_of_memory_error_split_across_two_reads_still_counts(tmp_path, monkeypatch):
+    relayed, result = relay_two_parts(tmp_path, monkeypatch, 'RuntimeError: CUDA out of ', 'memory.\n', code=1)
+
+    assert result == (1, True)
+    assert relayed.written == b'RuntimeError: CUDA out of memory.\n'
+
+
 def test_the_card_is_named_by_the_id_batch_tables_use():
     from deeplabel_backend import gpu
     assert gpu.parse('NVIDIA GeForce RTX 5090, 32607\n') == {

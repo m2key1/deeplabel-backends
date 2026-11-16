@@ -20,6 +20,8 @@ from pathlib import Path
 
 FALLBACK_NAME = 'fallback.json'
 OUT_OF_MEMORY = re.compile(r'CUDA out of memory|OutOfMemoryError|CUBLAS_STATUS_ALLOC_FAILED')
+# Longer than any OUT_OF_MEMORY match, which a read may split.
+MATCH_OVERLAP = 64
 
 
 # Page and line batches vary in shape, which strands memory in the caching allocator's fixed
@@ -30,15 +32,19 @@ ALLOCATOR = {'PYTORCH_CUDA_ALLOC_CONF': 'expandable_segments:True'}
 
 def _run_once(command: list[str]) -> tuple[int, bool]:
     """The entrypoint's exit code, and whether its output named an out-of-memory error.
-    Its output passes through to ours line by line, so the run's log is unchanged."""
+    Its output passes through to ours as it arrives, so the run's log is unchanged and a
+    progress bar redrawn with carriage returns stays live."""
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                env={**ALLOCATOR, **os.environ})
     out_of_memory = False
-    for line in iter(process.stdout.readline, b''):
-        sys.stdout.buffer.write(line)
+    carried = b''
+    while chunk := process.stdout.read1(65536):
+        sys.stdout.buffer.write(chunk)
         sys.stdout.buffer.flush()
-        if OUT_OF_MEMORY.search(line.decode('utf-8', errors='replace')):
+        seen = carried + chunk
+        if OUT_OF_MEMORY.search(seen.decode('utf-8', errors='replace')):
             out_of_memory = True
+        carried = seen[-MATCH_OVERLAP:]
     return process.wait(), out_of_memory
 
 
