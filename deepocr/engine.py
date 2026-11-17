@@ -79,7 +79,7 @@ class DeepOCREngine:
     the 'decoder' decode. Batched. Confidence is the AR decoder's
     per-character probability of the produced text (a decode-path-independent signal)."""
 
-    BEAM_WIDTH = 4
+    BEAM_WIDTH = 8
     NBEST = 8
     ALPHA = 0.3
     BETA = 0.0

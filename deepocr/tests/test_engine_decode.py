@@ -16,6 +16,12 @@ def test_the_decoder_decode_runs_only_on_a_model_with_a_decoder():
     assert resolve_decode('decoder', lm_on=False, use_decoder=False) == 'greedy'
 
 
+def test_rescored_asks_for_no_more_hypotheses_than_its_beam_returns():
+    # the flashlight decoder returns at most beam-width hypotheses
+    assert DeepOCREngine.NBEST <= DeepOCREngine.BEAM_WIDTH
+    assert DeepOCREngine.NBEST == 8
+
+
 def test_a_subword_probability_goes_to_every_byte_it_spells_and_end_tokens_to_none():
     token_probs = torch.tensor([[0.9, 0.5, 0.7, 0.2], [0.6, 0.8, 0.3, 0.1]])
     byte_counts = torch.tensor([[3, 1, 0, 0], [2, 2, 1, 0]])
