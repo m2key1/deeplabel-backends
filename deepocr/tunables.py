@@ -170,7 +170,8 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'constants': ['DECODER_DROPOUT'],
   'env': ['TRAIN_DECODER_DROPOUT'],
   'min': 0,
-  'max': 1},
+  'max': 1,
+  'defaults_by_decoder': {'token': 0.0}},
  {'key': 'mask_ratio',
   'label': 'Mask ratio',
   'group': 'Regularisation',
@@ -381,7 +382,7 @@ def run_defaults(chosen: dict, base_decoder: str | None = None) -> dict:
     """The knobs a run takes for itself, minus any its own choices rule out: DeepLabel's own,
     and the ones a knob sets for the base model's kind of decoder. A token decoder fine-tunes
     as it was trained: a gentler cross-attention rate, no label smoothing, and the checkpoint
-    picked on the decoder's reading, the one it is read with."""
+    picked on the decoder's reading, the one it is read with, and no dropout."""
     defaults = {**RUN_DEFAULTS, **{knob['key']: knob['defaults_by_decoder'][base_decoder] for knob in KNOBS
                                    if base_decoder in knob.get('defaults_by_decoder', {})}}
     if any({**defaults, **chosen}.get(knob) for knob in SELECTS_ON_DECODER):
