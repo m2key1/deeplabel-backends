@@ -24,6 +24,20 @@ def test_a_subword_probability_goes_to_every_byte_it_spells_and_end_tokens_to_no
     assert second == pytest.approx([0.6, 0.6, 0.8, 0.8, 0.3])
 
 
+def test_a_character_spelled_with_several_bytes_gets_one_band_over_all_of_them():
+    from utils.tokenizer import DeepTokenizer, canonicalize
+    engine = DeepOCREngine.__new__(DeepOCREngine)
+    engine.tokenizer = DeepTokenizer(normalize_unicode=True, verbose=False)
+    engine.canonicalize = canonicalize
+    # canonical 'ſa' is two bytes of long s and one of a
+    assert len(engine.tokenizer.encode('ſa')) == 3
+    spans = [[(0, 2, 0.9), (2, 3, 0.8), (5, 6, 0.7)]]
+
+    profile, = engine._profiles(['ſa'], spans, [[0.9, 0.8, 0.7]], torch.tensor([10]))
+
+    assert profile == [{'x0': 0.0, 'x1': 0.3, 'c': 80}, {'x0': 0.5, 'x1': 0.6, 'c': 70}]
+
+
 def test_a_narrow_line_is_padded_white_to_the_widest_line_of_its_batch():
     engine = DeepOCREngine.__new__(DeepOCREngine)
     engine.device = torch.device('cpu')

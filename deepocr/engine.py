@@ -190,10 +190,8 @@ class DeepOCREngine:
         return aligned
 
     def _char_token_counts(self, text):
-        canonical = self.canonicalize(text)
-        if getattr(self.tokenizer, 'use_bytes', False):
-            return [len(char.encode('utf-8')) for char in canonical]
-        return [1] * len(canonical)
+        """encode() spells each character as its UTF-8 bytes, one token each."""
+        return [len(char.encode('utf-8')) for char in self.canonicalize(text)]
 
     def _profiles(self, texts, aligned, token_probs, in_lens):
         """One band per character, placed where the alignment says its ink is. Falls back to
