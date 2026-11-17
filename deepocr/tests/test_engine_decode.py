@@ -38,6 +38,24 @@ def test_a_character_spelled_with_several_bytes_gets_one_band_over_all_of_them()
     assert profile == [{'x0': 0.0, 'x1': 0.3, 'c': 80}, {'x0': 0.5, 'x1': 0.6, 'c': 70}]
 
 
+def test_decoder_probabilities_land_on_the_bytes_the_alignment_counts():
+    from utils.tokenizer import DeepTokenizer, canonicalize
+    engine = DeepOCREngine.__new__(DeepOCREngine)
+    engine.tokenizer = DeepTokenizer(normalize_unicode=True, verbose=False)
+    engine.canonicalize = canonicalize
+    text = canonicalize('Bär')
+    # the decoder spells NFC: B, the two bytes of ä, r; the alignment counts B, a, the two bytes of the
+    # combining diaeresis, r
+    on_canonical = engine._on_canonical_bytes(text, [0.9, 0.6, 0.6, 0.8])
+    assert on_canonical == [0.9, 0.6, 0.6, 0.6, 0.8]
+    spans = [[(0, 1, 0.9), (1, 2, 0.9), (2, 3, 0.9), (2, 3, 0.9), (5, 6, 0.9)]]
+
+    profile, = engine._profiles([text], spans, [on_canonical], torch.tensor([10]))
+
+    assert [entry['x0'] for entry in profile] == [0.0, 0.1, 0.2, 0.5]
+    assert [entry['c'] for entry in profile] == [90, 60, 60, 80]
+
+
 def test_a_narrow_line_is_padded_white_to_the_widest_line_of_its_batch():
     engine = DeepOCREngine.__new__(DeepOCREngine)
     engine.device = torch.device('cpu')

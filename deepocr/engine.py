@@ -3,6 +3,7 @@ import math
 import multiprocessing
 import os
 import sys
+import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -241,7 +242,22 @@ class DeepOCREngine:
         logits = self.model._decode_teacher_forced(memory, mem_mask, inputs, padding)
         probs = F.softmax(logits.float(), dim=-1).permute(1, 0, 2)
         token_probs = probs.gather(2, targets.unsqueeze(-1)).squeeze(-1)
-        return spread_over_bytes(token_probs, decoder.token_bytes[targets])
+        return [self._on_canonical_bytes(text, byte_probs)
+                for text, byte_probs in zip(texts, spread_over_bytes(token_probs, decoder.token_bytes[targets]))]
+
+    def _on_canonical_bytes(self, text, nfc_byte_probs):
+        """The decoder spells NFC, the alignment counts the canonical (NFD) bytes. Each NFC character's
+        lowest byte probability goes to every byte of the characters it decomposes into; probabilities
+        that do not add up to the text are passed through for the uniform fallback."""
+        on_canonical, position = [], 0
+        for char in unicodedata.normalize('NFC', text):
+            width = len(char.encode('utf-8'))
+            spelled = nfc_byte_probs[position:position + width]
+            if len(spelled) < width:
+                return nfc_byte_probs
+            position += width
+            on_canonical += [min(spelled)] * len(self.canonicalize(char).encode('utf-8'))
+        return on_canonical if position == len(nfc_byte_probs) else nfc_byte_probs
 
     def honoured(self, convention: dict[str, bool]) -> list[str]:
         """The flags a read asks the model for that it knows, in the model's own order; a
