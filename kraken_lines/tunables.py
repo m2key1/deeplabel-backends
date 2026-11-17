@@ -33,6 +33,9 @@ KNOBS = [
 # What the Lightning trainer itself is given, beside Kraken's two configurations.
 TRAINER_DEFAULTS = {'precision': 'bf16-mixed'}
 
+# What a run that names no epochs trains for.
+DEFAULT_EPOCHS = 50
+
 
 def declared() -> list[dict]:
     """The train block's tunables, each with Kraken's default."""

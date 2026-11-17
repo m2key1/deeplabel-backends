@@ -103,7 +103,7 @@ def main() -> int:
         line_class_mapping=OrderedDict([(LINE_TYPE, 2)]), num_workers=loader_workers(),
         batch_size=params.get('batch_size') or 1, **by_source['data'])
     config = BLLASegmentationTrainingConfig(
-        epochs=params.get('epochs') or 50, quit='fixed', checkpoint_path=str(work / 'checkpoints'),
+        epochs=params.get('epochs') or tunables.DEFAULT_EPOCHS, quit='fixed', checkpoint_path=str(work / 'checkpoints'),
         resize='new', **by_source['model'])
     best = ModelCheckpoint(dirpath=config.checkpoint_path, save_top_k=1, monitor='val_metric', mode='max',
                            filename='best')

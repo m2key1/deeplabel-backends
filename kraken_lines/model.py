@@ -73,6 +73,7 @@ class KrakenBackend(Model):
                           # trained 12 pages/s there against 4.9 with 8 on an RTX 6000 (2026-10-20).
                           'cpus_per_gpu': 16, 'memory_per_gpu_gb': 64, 'preferred_gpu': 'l40s', 'default_batch': {'local': 1, 'cluster': 1}},
             'tunables': [{k: v for k, v in knob.items() if k != 'env'} for knob in tunables.declared()],
+            'default_epochs': tunables.DEFAULT_EPOCHS,
             'augmentation': None,
             'outputs': ['weights'],
             'resume': False,

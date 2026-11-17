@@ -100,6 +100,7 @@ class DeepOCRBackend(Model):
                           'memory_per_gpu_gb': 128, 'shm_gb': 8, 'batch_by_gpu': BATCH_BY_GPU,
                           'default_batch': {'local': LOCAL_BATCH, 'cluster': min(v for k, v in BATCH_BY_GPU.items() if k != 'rtx5090')}},
             'tunables': self.tunables(),
+            'default_epochs': tunables.constants()['EPOCHS'],
             'augmentation': {'library': 'albumentations', 'targets': ['image']},
             'outputs': ['weights', 'lm', 'lm_dict'],
             'resume': True,
