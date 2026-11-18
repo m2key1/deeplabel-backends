@@ -5,8 +5,8 @@ import train_entrypoint  # noqa: E402
 from deepocr import tunables  # noqa: E402
 from deeplabel_backend.train import BUILTIN_MARKER  # noqa: E402
 
-TOKEN_BASE = {'token_decoder_lr': 1e-4, 'select_on_decoder': True, 'decoder_label_smoothing': 0.0,
-              'decoder_dropout': 0.0}
+TOKEN_BASE = {'decoder_lr': 1e-5, 'token_decoder_lr': 1e-5, 'select_on_decoder': True,
+              'decoder_label_smoothing': 0.0, 'decoder_dropout': 0.0}
 
 
 def test_a_token_decoder_base_fine_tunes_as_the_token_decoder_was_trained():
@@ -20,7 +20,8 @@ def test_a_character_decoder_base_keeps_the_runs_defaults():
 
 def test_a_value_the_run_chose_wins_over_the_bases_default():
     chosen = {'token_decoder_lr': 5e-5, 'select_on_decoder': False}
-    assert tunables.run_defaults(chosen, 'token') == {'decoder_label_smoothing': 0.0, 'decoder_dropout': 0.0,
+    assert tunables.run_defaults(chosen, 'token') == {'decoder_lr': 1e-5, 'decoder_label_smoothing': 0.0,
+                                                      'decoder_dropout': 0.0,
                                                       'decoder_val_frequency': 5}
 
 
@@ -28,7 +29,7 @@ def test_the_cross_attention_rate_is_a_knob_with_its_own_variable():
     knob = next(k for k in tunables.KNOBS if k['key'] == 'token_decoder_lr')
     assert knob['env'] == ['TRAIN_TOKEN_DECODER_NEW_LR']
     assert knob['constants'] == ['TOKEN_DECODER_NEW_LR']
-    assert knob['defaults_by_decoder'] == {'token': 1e-4}
+    assert knob['defaults_by_decoder'] == {'token': 1e-5}
 
 
 def test_the_form_is_told_each_token_base_default():
@@ -70,5 +71,6 @@ def test_the_builtin_base_is_read_from_the_image(tmp_path, monkeypatch):
 
 def test_a_token_base_run_gets_the_variables_train_py_reads():
     env = train_entrypoint.run_default_env({'hyperparams': {}}, 'token')
-    assert env == {'TRAIN_TOKEN_DECODER_NEW_LR': '0.0001', 'TRAIN_SELECT_ON_DECODER': 'True',
-                   'TRAIN_DECODER_LABEL_SMOOTHING': '0.0', 'TRAIN_DECODER_DROPOUT': '0.0'}
+    assert env == {'TRAIN_DECODER_BASE_LR': '1e-05', 'TRAIN_TOKEN_DECODER_NEW_LR': '1e-05',
+                   'TRAIN_SELECT_ON_DECODER': 'True', 'TRAIN_DECODER_LABEL_SMOOTHING': '0.0',
+                   'TRAIN_DECODER_DROPOUT': '0.0'}

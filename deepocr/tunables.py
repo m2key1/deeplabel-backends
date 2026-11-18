@@ -39,10 +39,11 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'label': 'Decoder rate',
   'group': 'Schedule',
   'kind': 'float',
-  'help': 'Peak rate for the character decoder only.',
+  'help': "Peak rate for the decoder's own layers: the character decoder, or a token decoder's language model.",
   'constants': ['DECODER_BASE_LR'],
   'env': ['TRAIN_DECODER_BASE_LR'],
-  'above': 0},
+  'above': 0,
+  'defaults_by_decoder': {'token': 1e-5}},
  {'key': 'token_decoder_lr', 'role': 'learning_rate',
   'label': 'Decoder cross-attention rate',
   'group': 'Schedule',
@@ -52,7 +53,7 @@ KNOBS = [{'key': 'learning_rate', 'role': 'learning_rate',
   'constants': ['TOKEN_DECODER_NEW_LR'],
   'env': ['TRAIN_TOKEN_DECODER_NEW_LR'],
   'above': 0,
-  'defaults_by_decoder': {'token': 1e-4}},
+  'defaults_by_decoder': {'token': 1e-5}},
  {'key': 'grad_accum_steps', 'role': 'accumulation',
   'label': 'Gradient accumulation',
   'group': 'Memory',
@@ -381,8 +382,8 @@ def declared() -> list[dict]:
 def run_defaults(chosen: dict, base_decoder: str | None = None) -> dict:
     """The knobs a run takes for itself, minus any its own choices rule out: DeepLabel's own,
     and the ones a knob sets for the base model's kind of decoder. A token decoder fine-tunes
-    as it was trained: a gentler cross-attention rate, no label smoothing, and the checkpoint
-    picked on the decoder's reading, the one it is read with, and no dropout."""
+    as it was trained, with a slow decoder: no label smoothing, no dropout, and the checkpoint
+    picked on the decoder's reading, the one it is read with."""
     defaults = {**RUN_DEFAULTS, **{knob['key']: knob['defaults_by_decoder'][base_decoder] for knob in KNOBS
                                    if base_decoder in knob.get('defaults_by_decoder', {})}}
     if any({**defaults, **chosen}.get(knob) for knob in SELECTS_ON_DECODER):
