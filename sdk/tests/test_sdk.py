@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
-from deeplabel_backend import Loaded, Model, create_app
+from deeplabel_backend import Loaded, Model, create_app, gpu
 from deeplabel_backend.schemas import LoadRequest
 from deeplabel_backend.train import legacy_env
 from deeplabel_backend.weights import WeightCache
@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'contract_tests'))
 from fixture_server import SECRET_HEADER, FixtureServer
 
 SECRET = 'unit-secret'
+GB = 1 << 30
 
 
 class OutOfMemoryError(RuntimeError):
@@ -204,6 +205,74 @@ def test_a_restarted_backend_trusts_its_cached_files(model, files, tmp_path):
     files.requests.clear()
     load(WeightCache(model, tmp_path, SECRET, max_bytes=1 << 30, max_loaded=2), files, data)
     assert files.requests == []
+
+
+def test_unloading_a_version_gives_its_memory_back_to_the_card(model, files, tmp_path, monkeypatch):
+    released = []
+    monkeypatch.setattr(gpu, 'release', lambda: released.append(True))
+    cache = WeightCache(model, tmp_path, SECRET, max_bytes=1 << 30, max_loaded=2)
+    a = load(cache, files, b'a' * 10)
+    assert released == []
+
+    cache.unload(a)
+
+    assert released == [True]
+    assert model.unloaded == [['weights']]
+
+
+def test_a_version_keeps_the_most_memory_it_took_across_a_restart(model, files, tmp_path, monkeypatch):
+    peaks = iter([3 * GB, 5 * GB, 4 * GB])
+    monkeypatch.setattr(gpu, 'start_measuring', lambda: None)
+    monkeypatch.setattr(gpu, 'peak', lambda: next(peaks))
+    cache = WeightCache(model, tmp_path, SECRET, max_bytes=1 << 30, max_loaded=2)
+    a = load(cache, files, b'a' * 10)
+    for _ in range(2):
+        with cache.use(a):
+            pass
+
+    assert cache.state(a) == {'state': 'loaded', 'facts': {'roles': ['weights']}, 'gpu_memory': 5 * GB}
+    cache.unload(a)
+    restarted = WeightCache(model, tmp_path, SECRET, max_bytes=1 << 30, max_loaded=2)
+    assert restarted.state(a) == {'state': 'cached', 'gpu_memory': 5 * GB}
+
+
+def test_the_disk_budget_never_deletes_the_remembered_sizes(model, files, tmp_path, monkeypatch):
+    monkeypatch.setattr(gpu, 'peak', lambda: 2 * GB)
+    cache = WeightCache(model, tmp_path, SECRET, max_bytes=15, max_loaded=1)
+    a = load(cache, files, b'a' * 10)
+    load(cache, files, b'b' * 10)
+
+    assert not cache.file_path(a).exists()
+    assert WeightCache(model, tmp_path, SECRET, max_bytes=15, max_loaded=1).state(a) == {
+        'state': 'absent', 'gpu_memory': 2 * GB}
+
+
+def test_memory_names_the_card_and_each_loaded_version_with_its_size_and_idle_time(model, tmp_path, monkeypatch):
+    monkeypatch.setattr(gpu, 'card_memory', lambda: {'total': 32 * GB, 'free': 20 * GB})
+    monkeypatch.setattr(gpu, 'peak', lambda: 2 * GB)
+    app = create_app(model, secret=SECRET, cache_dir=tmp_path)
+    client = TestClient(app)
+    client.get('/v1/weights/builtin', headers={SECRET_HEADER: SECRET})
+    app.state.cache.versions['builtin'].last_used -= 30
+
+    response = client.get('/v1/memory', headers={SECRET_HEADER: SECRET})
+
+    assert response.json() == {'card': {'total': 32 * GB, 'free': 20 * GB},
+                               'loaded': [{'sha256': 'builtin', 'gpu_memory': 2 * GB, 'idle_seconds': 30.0}]}
+
+
+def test_the_card_memory_is_read_from_the_drivers_first_card_in_bytes():
+    assert gpu.parse_memory('32607, 25000\n32607, 1000\n') == {'total': 32607 << 20, 'free': 25000 << 20}
+    assert gpu.parse_memory('') is None
+
+
+def test_a_process_that_never_started_cuda_measures_nothing_and_releases_nothing(monkeypatch):
+    monkeypatch.delitem(sys.modules, 'torch', raising=False)
+
+    gpu.start_measuring()
+    gpu.release()
+
+    assert gpu.peak() is None
 
 
 def test_params_become_the_train_variables_our_train_scripts_read(tmp_path):

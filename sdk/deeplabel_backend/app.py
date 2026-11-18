@@ -160,6 +160,10 @@ def create_app(model: Model, secret: str | None = None, cache_dir: Path | None =
             raise version.error
         return JSONResponse(version.public(), status_code=200 if version.state == 'loaded' else 202)
 
+    @app.get('/v1/memory')
+    def memory():
+        return {'card': gpu.card_memory(), 'loaded': cache.memory()}
+
     @app.get('/v1/weights/{sha256}')
     def weights_state(sha256: str):
         return cache.state(sha256)

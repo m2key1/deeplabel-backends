@@ -1,3 +1,4 @@
+import json
 import os
 import threading
 import time
@@ -5,13 +6,15 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import errors, transfer
+from . import errors, gpu, transfer
 from .errors import BackendError
 from .model import Loaded, Model
 from .schemas import WEIGHT_ROLES, LoadRequest
 
 BUILTIN = 'builtin'
 IDLE_SWEEP_SECONDS = 10
+# The most card memory each version was seen to take, kept beside the files it was loaded from.
+SIZES_FILE = 'gpu-memory.json'
 
 
 @dataclass
@@ -56,6 +59,7 @@ class WeightCache:
         self.file_locks: dict[str, threading.Lock] = {}
         self.builtin_lock = threading.Lock()
         directory.mkdir(parents=True, exist_ok=True)
+        self.sizes = self._read_sizes()
         if idle_unload_seconds > 0:
             threading.Thread(target=self._idle_sweep, daemon=True).start()
 
@@ -68,12 +72,42 @@ class WeightCache:
 
     def state(self, sha256: str) -> dict:
         if sha256 == BUILTIN and self.model.builtin:
-            return self._builtin().public()
+            return self._sized(BUILTIN, self._builtin().public())
         with self.lock:
             version = self.versions.get(sha256)
             if version is not None and version.state != 'absent':
-                return version.public()
-        return {'state': 'cached' if self.file_path(sha256).is_file() else 'absent'}
+                return self._sized(sha256, version.public())
+        return self._sized(sha256, {'state': 'cached' if self.file_path(sha256).is_file() else 'absent'})
+
+    def _sized(self, sha256: str, state: dict) -> dict:
+        size = self.sizes.get(sha256)
+        return {**state, 'gpu_memory': size} if size else state
+
+    def memory(self) -> list[dict]:
+        """What is loaded, with the card memory each was seen to take and how long it has
+        gone unused, for DeepLabel to pick what to unload (3.9)."""
+        now = time.monotonic()
+        with self.lock:
+            return [{'sha256': sha, 'gpu_memory': self.sizes.get(sha), 'idle_seconds': round(now - version.last_used, 1)}
+                    for sha, version in self.versions.items() if version.state == 'loaded']
+
+    def _read_sizes(self) -> dict[str, int]:
+        try:
+            return json.loads((self.directory / SIZES_FILE).read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def _measured(self, sha256: str) -> None:
+        """Keep the most card memory this version has been seen to take, loading or
+        predicting, so the next load beside other backends knows it before it starts."""
+        peak = gpu.peak()
+        with self.lock:
+            if peak is None or peak <= self.sizes.get(sha256, 0):
+                return
+            self.sizes[sha256] = peak
+            partial = self.directory / f'{SIZES_FILE}.part'
+            partial.write_text(json.dumps(self.sizes))
+            partial.replace(self.directory / SIZES_FILE)
 
     def _check(self, request: LoadRequest) -> None:
         declared = self.model.model_type
@@ -114,11 +148,13 @@ class WeightCache:
             with self.lock:
                 version.state = 'loading'
             self._make_room(keep=version.sha256)
+            gpu.start_measuring()
             loaded = self.model.load(paths, self.device)
             with self.lock:
                 version.loaded = loaded
                 version.state = 'loaded'
                 version.last_used = time.monotonic()
+            self._measured(version.sha256)
         except transfer.TransferError as error:
             self._fail(version, errors.checksum_mismatch(str(error)) if error.kind == 'mismatch'
                        else errors.weights_unavailable(str(error)))
@@ -166,6 +202,7 @@ class WeightCache:
         try:
             yield version.loaded
         finally:
+            self._measured(version.sha256)
             with self.lock:
                 version.refs -= 1
                 if version.unload_pending and version.refs == 0:
@@ -179,13 +216,15 @@ class WeightCache:
                 version = self.versions.get(BUILTIN)
                 if version is not None and version.state == 'loaded':
                     return version
+            gpu.start_measuring()
             loaded = self.model.load({}, self.device)
             with self.lock:
                 version = self.versions.setdefault(BUILTIN, Version(BUILTIN))
                 version.loaded = loaded
                 version.state = 'loaded'
                 version.settled.set()
-                return version
+            self._measured(BUILTIN)
+            return version
 
     def unload(self, sha256: str | None = None) -> list[str]:
         with self.lock:
@@ -203,6 +242,7 @@ class WeightCache:
         version.unload_pending = False
         version.state = 'cached' if self.file_path(version.sha256).is_file() else 'absent'
         self.model.unload(loaded)
+        gpu.release()
 
     def _make_room(self, keep: str) -> None:
         with self.lock:
@@ -218,7 +258,8 @@ class WeightCache:
             in_use = {ref.sha256 for v in self.versions.values()
                       if v.state in ('downloading', 'loading', 'loaded') and v.request
                       for ref in v.request.files.values()}
-            files = [p for p in self.directory.iterdir() if p.is_file() and not p.name.endswith('.part')]
+            files = [p for p in self.directory.iterdir()
+                     if p.is_file() and not p.name.endswith('.part') and p.name != SIZES_FILE]
             total = sum(p.stat().st_size for p in files)
             for path in sorted(files, key=lambda p: p.stat().st_mtime):
                 if total <= self.max_bytes:
