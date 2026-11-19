@@ -14,9 +14,10 @@ import torch
 # Started by path, in the run's own directory: the wrappers are not on the path by themselves.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from deeplabel_backend.train import BUILTIN_MARKER, legacy_env, write_outputs
+from deeplabel_backend.train import BUILTIN_MARKER, legacy_env, run_until_finished, write_outputs
 
 from deepocr import BUILTIN_DIR, BUILTIN_FILES, MODEL_REPO, tunables
+from deepocr.finish import keep_best
 
 LM_BUILD_TIMEOUT = 3600
 
@@ -129,8 +130,11 @@ def main() -> int:
     gpus = int(os.environ.get('TRAIN_GPUS') or params.get('gpus') or 1)
     command = ([sys.executable, '-m', 'torch.distributed.run', f'--nproc_per_node={gpus}', 'train.py']
                if gpus > 1 else [sys.executable, 'train.py'])
-    code = subprocess.call(command, cwd=MODEL_REPO, env=env)
-    if code:
+    code, finished = run_until_finished(command, output, cwd=MODEL_REPO, env=env)
+    if finished and not keep_best(output):
+        print('Asked to finish before the first validation: there is no best epoch to keep', flush=True)
+        return 1
+    if code and not finished:
         return code
     found = json.loads((output / 'metrics.json').read_text(encoding='utf-8')) if (output / 'metrics.json').is_file() else {}
     cer = found.get('cer')

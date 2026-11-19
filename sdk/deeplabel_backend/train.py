@@ -25,6 +25,10 @@ BUILTIN_MARKER = 'builtin'
 ARTIFACTS_NAME = 'artifacts.json'
 DEFAULT_ARTIFACTS = {'files': [{'role': 'weights', 'path': 'model.ckpt'}]}
 TERM_GRACE_SECONDS = 30
+# The file in TRAIN_OUTPUT that asks a run to end now, keeping its best epoch (6.5): written by
+# the backend for a local run, and by DeepLabel beside a cluster run's output.
+FINISH_NAME = 'finish'
+FINISH_POLL_SECONDS = 2
 LOG_TAIL_LINES = 40
 FINISHED = ('done', 'error', 'cancelled')
 
@@ -132,6 +136,29 @@ def legacy_env(environ: dict[str, str], tunables: list[dict],
         for name in [targets] if isinstance(targets, str) else targets:
             env[name] = json.dumps(value) if isinstance(value, (list, dict, bool)) else str(value)
     return env
+
+
+def finish_requested(output: Path) -> bool:
+    return (output / FINISH_NAME).is_file()
+
+
+def run_until_finished(command: list[str], output: Path, **popen) -> tuple[int, bool]:
+    """Run a trainer until it exits, or until its run is asked to finish: then it is stopped
+    as a cancel stops it, for the entrypoint to keep the best epoch it reached. Returns the
+    trainer's exit code and whether the run was asked to finish."""
+    process = subprocess.Popen(command, **popen)
+    while True:
+        try:
+            return process.wait(FINISH_POLL_SECONDS), False
+        except subprocess.TimeoutExpired:
+            if not finish_requested(output):
+                continue
+        process.terminate()
+        try:
+            process.wait(TERM_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:
+            process.kill()
+        return process.wait(), True
 
 
 class ProgressLog:
@@ -309,6 +336,16 @@ class TrainManager:
             if training.cancelled.is_set():
                 self._set(training, state='cancelled', phase='')
             self.slots.release()
+
+    def finish(self, training: Training) -> Training:
+        """Ask a running training's entrypoint to end it now, keeping its best epoch (6.5)."""
+        if not (self.model.train_info() or {}).get('finish'):
+            raise errors.BackendError(409, 'not_supported', 'this backend cannot end a run early')
+        if training.state != 'running':
+            raise errors.BackendError(409, 'not_running', f'training {training.id} is {training.state}, not running')
+        (training.output / FINISH_NAME).touch()
+        self._set(training, phase='finishing')
+        return training
 
     def cancel(self, training: Training) -> Training:
         with self.lock:

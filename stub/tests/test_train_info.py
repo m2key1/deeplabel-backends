@@ -56,3 +56,7 @@ def test_a_lines_stub_does_not(monkeypatch):
     monkeypatch.setenv('STUB_TRAIN_SNAPSHOT', 'page-lines/1')
     assert 'conventions' not in StubModel().train_info()
 
+
+
+def test_the_stub_can_end_a_run_early_keeping_its_best_epoch():
+    assert StubModel().train_info()['finish'] is True

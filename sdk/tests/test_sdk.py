@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import sys
 import threading
 import time
@@ -9,7 +10,8 @@ from pathlib import Path
 import pytest
 from deeplabel_backend import Loaded, Model, create_app, gpu
 from deeplabel_backend.schemas import LoadRequest
-from deeplabel_backend.train import legacy_env
+from deeplabel_backend import train as train_module
+from deeplabel_backend.train import Training, legacy_env, run_until_finished
 from deeplabel_backend.weights import WeightCache
 from fastapi.testclient import TestClient
 
@@ -513,3 +515,57 @@ def test_a_base_is_laid_out_by_role_a_builtin_base_as_its_marker_and_none_left_e
     assert (tmp_path / 'files' / 'weights').read_bytes() == b'w'
     assert [p.name for p in (tmp_path / 'builtin').iterdir()] == ['builtin']
     assert list((tmp_path / 'scratch').iterdir()) == []
+
+
+class FinishingModel(FakeModel):
+    def train_info(self):
+        return {'tasks': ['ocr'], 'entrypoint': ['train'], 'finish': True}
+
+
+def running_training(app, tmp_path, state: str = 'running') -> Training:
+    training = Training('run-1', tmp_path / 'run-1', {}, state=state, phase='training')
+    training.output.mkdir(parents=True)
+    app.state.trainings.trainings['run-1'] = training
+    return training
+
+
+def test_finishing_a_running_training_leaves_the_finish_file_for_its_entrypoint(tmp_path):
+    app = create_app(FinishingModel(), secret=SECRET, cache_dir=tmp_path)
+    training = running_training(app, tmp_path)
+
+    response = TestClient(app).post('/v1/train/run-1/finish', headers={SECRET_HEADER: SECRET})
+
+    assert response.status_code == 202
+    assert (response.json()['state'], response.json()['phase']) == ('running', 'finishing')
+    assert (training.output / 'finish').is_file()
+
+
+@pytest.mark.parametrize('model, state, code', [
+    (FinishingModel(), 'done', 'not_running'),
+    (FakeModel(), 'running', 'not_supported'),
+], ids=['over', 'backend cannot'])
+def test_a_training_that_cannot_be_finished_is_refused(tmp_path, model, state, code, monkeypatch):
+    monkeypatch.setattr(model, 'train_info', lambda: {'tasks': ['ocr'], 'entrypoint': ['train'],
+                                                      'finish': isinstance(model, FinishingModel)})
+    app = create_app(model, secret=SECRET, cache_dir=tmp_path)
+    training = running_training(app, tmp_path, state)
+
+    response = TestClient(app).post('/v1/train/run-1/finish', headers={SECRET_HEADER: SECRET})
+
+    assert (response.status_code, response.json()['error']['code']) == (409, code)
+    assert not (training.output / 'finish').exists()
+
+
+def test_a_trainer_left_alone_runs_to_its_end(tmp_path):
+    assert run_until_finished([sys.executable, '-c', 'pass'], tmp_path) == (0, False)
+
+
+def test_a_trainer_whose_run_is_asked_to_finish_is_stopped_and_says_so(tmp_path, monkeypatch):
+    monkeypatch.setattr(train_module, 'FINISH_POLL_SECONDS', 0.05)
+    threading.Timer(0.3, (tmp_path / 'finish').touch).start()
+    started = time.monotonic()
+
+    result = run_until_finished([sys.executable, '-c', 'import time; time.sleep(30)'], tmp_path)
+
+    assert result == (-signal.SIGTERM, True)
+    assert time.monotonic() - started < 5

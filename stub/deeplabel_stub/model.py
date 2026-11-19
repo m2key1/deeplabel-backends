@@ -317,6 +317,7 @@ class StubModel(Model):
             'default_epochs': len(TRAIN_EPOCHS),
             'outputs': ['weights', 'lm', 'lm_dict'] if snapshot == 'ocr-lines/1' else ['weights'],
             'resume': True,
+            'finish': True,
             'metrics': METRICS,
             **({'line_shape': 'box'} if snapshot == 'page-lines/1' else {}),
             **({'conventions': True} if snapshot == 'ocr-lines/1' else {}),

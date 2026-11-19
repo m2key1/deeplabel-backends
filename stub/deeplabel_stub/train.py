@@ -4,11 +4,14 @@ import sys
 import time
 from pathlib import Path
 
-from deeplabel_backend.train import ProgressLog, run_hyperparams, write_outputs
+from deeplabel_backend.train import ProgressLog, finish_requested, run_hyperparams, write_outputs
 
 from deeplabel_stub.model import TRAIN_EPOCHS, train_tunables, weights_mode
 
 SLOW_SECONDS = 15
+# [stalls]: best after epoch 2 and worse every epoch after, slow enough to stop by hand.
+STALLING_EPOCHS = [(0.9, 0.4), (0.7, 0.2)] + [(0.6, round(0.25 + 0.005 * k, 4)) for k in range(38)]
+STALLING_SECONDS = 1.0
 
 
 def valid_groups(snapshot: Path) -> list[str]:
@@ -23,7 +26,8 @@ def main() -> None:
     when the valid split spans several datasets, and a weights file. Run names carry the
     markers specs use: [slow] waits first, [no-ts] leaves the timestamps out, [oom] runs out
     of memory above a batch of 2, as a dense page does on a small card, [lm-fails] fails the
-    language model a run asks for."""
+    language model a run asks for, [stalls] is best after epoch 2 and worse for 38 epochs
+    after, a second each, until it is asked to finish."""
     params = json.loads(Path(os.environ['TRAIN_PARAMS']).read_text(encoding='utf-8'))
     output = Path(os.environ['TRAIN_OUTPUT'])
     name = params.get('run', {}).get('name', '')
@@ -39,16 +43,20 @@ def main() -> None:
     groups = valid_groups(Path(os.environ['TRAIN_SNAPSHOT']))
     progress = ProgressLog(output)
     stamp = {'ts': None} if '[no-ts]' in name else {}
-    for epoch, (loss, cer) in enumerate(TRAIN_EPOCHS, start=1):
+    stalls = '[stalls]' in name
+    epochs = STALLING_EPOCHS if stalls else TRAIN_EPOCHS
+    for epoch, (loss, cer) in enumerate(epochs, start=1):
         progress.write(epoch=epoch, loss=loss, **stamp)
         progress.write(epoch=epoch, **{'train/grad_norm': round(3.0 / epoch, 3)}, **stamp)
         point = {'epoch': epoch, 'cer': cer, **stamp}
         if len(groups) > 1:
             point['cer_by_dataset'] = {group: round(cer + 0.01 * rank, 4) for rank, group in enumerate(groups)}
         progress.write(**point)
-        time.sleep(0.1)
+        time.sleep(STALLING_SECONDS if stalls else 0.1)
+        if finish_requested(output):
+            break
     progress.close()
-    print(f'stub trainer: epoch {len(TRAIN_EPOCHS)}/{len(TRAIN_EPOCHS)} done', flush=True)
+    print(f'stub trainer: epoch {epoch}/{len(epochs)} done', flush=True)
     (output / 'trained_with.json').write_text(json.dumps(trained_with), encoding='utf-8')
     # A model tuned from a slow or misreading base keeps its behaviour, so what it reads can
     # still be told apart from the truth.
@@ -60,7 +68,8 @@ def main() -> None:
         lm = {'lm_build': 'failed' if '[lm-fails]' in name else 'built'}
         if lm['lm_build'] == 'built':
             files += language_model(output, params.get('run', {}).get('id'))
-    write_outputs(output, {'val_metric': 0.42, 'val_metric_name': 'cer', 'higher_is_better': False,
+    best = min(cer for _, cer in epochs[:epoch]) if stalls else 0.42
+    write_outputs(output, {'val_metric': best, 'val_metric_name': 'cer', 'higher_is_better': False,
                            'task': params.get('task')}, files, **lm)
 
 

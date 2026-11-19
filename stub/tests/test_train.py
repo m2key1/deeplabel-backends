@@ -63,3 +63,30 @@ def test_a_run_not_asking_for_one_gets_none(run):
     _base, output = run
     train.main()
     assert 'lm_build' not in listed(output)
+
+
+def test_a_stalling_run_asked_to_finish_ends_with_its_best_epoch(tmp_path, monkeypatch):
+    _base, output = start(tmp_path, monkeypatch, {})
+    params = output.parent / 'params.json'
+    params.write_text(json.dumps({**json.loads(params.read_text()), 'run': {'id': 5, 'name': 'tuned [stalls]'}}))
+
+    def epoch_over(seconds):
+        epochs = [json.loads(line).get('epoch') for line in (output / 'progress.jsonl').read_text().splitlines()]
+        if max(epochs) == 4:
+            (output / 'finish').touch()
+    monkeypatch.setattr(train.time, 'sleep', epoch_over)
+
+    train.main()
+
+    cers = [json.loads(line)['cer'] for line in (output / 'progress.jsonl').read_text().splitlines() if '"cer"' in line]
+    assert cers == [0.4, 0.2, 0.25, 0.255]
+    assert json.loads((output / 'metrics.json').read_text())['val_metric'] == 0.2
+    assert (output / 'model.ckpt').read_text() == 'stub-checkpoint 5'
+
+
+def test_a_run_left_alone_trains_all_its_epochs(run):
+    _base, output = run
+    train.main()
+    epochs = {json.loads(line)['epoch'] for line in (output / 'progress.jsonl').read_text().splitlines()}
+    assert epochs == {1, 2, 3}
+    assert json.loads((output / 'metrics.json').read_text())['val_metric'] == 0.42

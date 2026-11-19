@@ -270,6 +270,11 @@ def create_app(model: Model, secret: str | None = None, cache_dir: Path | None =
         lines = trainings.get(train_id).progress_lines()[max(0, start):]
         return PlainTextResponse(''.join(line + '\n' for line in lines), media_type='application/x-ndjson')
 
+    @app.post('/v1/train/{train_id}/finish')
+    def finish_training(train_id: str):
+        trainable()
+        return JSONResponse(trainings.finish(trainings.get(train_id)).public(), status_code=202)
+
     @app.post('/v1/train/{train_id}/cancel')
     def cancel_training(train_id: str):
         trainable()

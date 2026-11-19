@@ -2,7 +2,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-CONTRACT = '1.6'
+CONTRACT = '1.7'
 TASKS = ('layout', 'lines', 'ocr', 'map_segmentation', 'edges')
 WEIGHT_ROLES = ('weights', 'lm', 'lm_dict', 'config')
 SNAPSHOT_FORMAT = 'deeplabel-snapshot/1'

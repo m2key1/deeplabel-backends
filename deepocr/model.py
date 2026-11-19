@@ -104,6 +104,7 @@ class DeepOCRBackend(Model):
             'augmentation': {'library': 'albumentations', 'targets': ['image']},
             'outputs': ['weights', 'lm', 'lm_dict'],
             'resume': True,
+            'finish': True,
             'metrics': METRICS,
             # A run conditions on each dataset's convention flags and can teach its base new ones.
             'conventions': True,
