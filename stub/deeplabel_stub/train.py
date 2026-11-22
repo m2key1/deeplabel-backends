@@ -27,7 +27,7 @@ def main() -> None:
     markers specs use: [slow] waits first, [no-ts] leaves the timestamps out, [oom] runs out
     of memory above a batch of 2, as a dense page does on a small card, [lm-fails] fails the
     language model a run asks for, [stalls] is best after epoch 2 and worse for 38 epochs
-    after, a second each, until it is asked to finish."""
+    after, a second each, until it is asked to finish, and [once] reports its first epoch only."""
     params = json.loads(Path(os.environ['TRAIN_PARAMS']).read_text(encoding='utf-8'))
     output = Path(os.environ['TRAIN_OUTPUT'])
     name = params.get('run', {}).get('name', '')
@@ -44,7 +44,7 @@ def main() -> None:
     progress = ProgressLog(output)
     stamp = {'ts': None} if '[no-ts]' in name else {}
     stalls = '[stalls]' in name
-    epochs = STALLING_EPOCHS if stalls else TRAIN_EPOCHS
+    epochs = STALLING_EPOCHS if stalls else TRAIN_EPOCHS[:1] if '[once]' in name else TRAIN_EPOCHS
     for epoch, (loss, cer) in enumerate(epochs, start=1):
         progress.write(epoch=epoch, loss=loss, **stamp)
         progress.write(epoch=epoch, **{'train/grad_norm': round(3.0 / epoch, 3)}, **stamp)

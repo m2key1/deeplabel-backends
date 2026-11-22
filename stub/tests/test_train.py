@@ -90,3 +90,11 @@ def test_a_run_left_alone_trains_all_its_epochs(run):
     epochs = {json.loads(line)['epoch'] for line in (output / 'progress.jsonl').read_text().splitlines()}
     assert epochs == {1, 2, 3}
     assert json.loads((output / 'metrics.json').read_text())['val_metric'] == 0.42
+
+
+def test_a_run_marked_once_reports_its_first_epoch_only(tmp_path, monkeypatch):
+    _base, output = start(tmp_path, monkeypatch, {'run': {'id': 5, 'name': 'tuned [once]'}})
+    train.main()
+    lines = [json.loads(line) for line in (output / 'progress.jsonl').read_text().splitlines()]
+    assert {line['epoch'] for line in lines} == {1}
+    assert [line['cer'] for line in lines if 'cer' in line] == [0.5]
