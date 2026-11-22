@@ -34,15 +34,16 @@ def test_a_trainable_backend_declares_its_train_block(info):
 
 def test_a_trainable_backends_batches_and_scaling_roles_are_well_formed(info):
     """6.9: a batch per card is per GPU; the effective batch is the one its learning rates
-    were tuned at; at most one tunable carries the accumulation."""
+    were tuned at; an epoch's minimum is a count; at most one tunable carries the accumulation."""
     train = info.get('train')
     if train is None:
         return
     resources = train.get('resources') or {}
     for card, batch in (resources.get('batch_by_gpu') or {}).items():
         assert isinstance(card, str) and isinstance(batch, int) and batch >= 1
-    effective = resources.get('effective_batch')
-    assert effective is None or (isinstance(effective, int) and effective >= 1)
+    for field in ('effective_batch', 'min_epoch_items'):
+        value = resources.get(field)
+        assert value is None or (isinstance(value, int) and value >= 1), field
     roles = [t.get('role') for t in train.get('tunables', []) if t.get('role')]
     assert set(roles) <= {'accumulation', 'learning_rate'}
     assert roles.count('accumulation') <= 1
