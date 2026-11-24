@@ -59,7 +59,8 @@ def test_the_card_a_backend_reports_is_described_when_it_has_one(info):
 
 def test_a_trainable_backend_declares_its_metrics_for_the_run_page(info):
     """6.9: each metric's unit and better direction; `*` in a key matches many (one per
-    class); exactly one headline; the standard ones the SDK adds are there."""
+    class); exactly one headline, and at most one other metric picking the kept checkpoint;
+    the standard ones the SDK adds are there."""
     train = info.get('train')
     if train is None:
         return
@@ -70,3 +71,4 @@ def test_a_trainable_backend_declares_its_metrics_for_the_run_page(info):
         assert metric.get('better') in (None, 'higher', 'lower')
     assert {'lr', 'gpu/peak_memory_gb'} <= {m['key'] for m in metrics}
     assert sum(1 for m in metrics if m.get('headline')) == 1
+    assert sum(1 for m in metrics if m.get('selects')) <= 1
