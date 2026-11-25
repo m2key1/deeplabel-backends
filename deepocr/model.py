@@ -13,10 +13,11 @@ from deepocr.engine import DECODES, DeepOCREngine
 VERSION = '1.0.0'
 # The image's interpreter, named outright: a cluster runtime need not carry the image's PATH.
 ENTRYPOINT_PYTHON = '/srv/.venv/bin/python'
-# The largest batch per card whose reserved memory stays under 90% at the widest bucket, measured
-# on v4's token decoder (2026-11-16) with two GPUs under DDP. The 5090 trains alone, so it has no
-# gradient buckets, and stops one short of 90% to leave room for longer text than the probe's.
-BATCH_BY_GPU = {'h200': 62, 'rtx6000bb': 40, 'l40s': 16, 'rtx5090': 10}
+# The largest batch per card whose allocated memory stays under 85% when every line is at the
+# widest bucket with 250 characters, measured on v4.1 (2026-11-25) with two GPUs under DDP: about
+# 2.2 GiB a line on top of 10 GiB. Reserved memory fills the card at any batch, so it cannot be the
+# measure. The L40S and the 5090, which trains alone, are scaled from that, not measured.
+BATCH_BY_GPU = {'h200': 50, 'rtx6000bb': 32, 'l40s': 12, 'rtx5090': 9}
 LOCAL_BATCH = 8
 # How many line crops one forward pass takes; the engine halves it after an out-of-memory error.
 FORWARD_BATCH = int(os.environ.get('DEEPOCR_BATCH', '32'))
